@@ -1,0 +1,187 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © fancier001
+
+//@version=4
+strategy("My strategy", overlay = true, close_entries_rule = "ANY", pyramiding = 5)
+prd = input(defval = 8, title = "ZigZag period", minval = 2, maxval = 20)
+upColor = input(defval = color.lime, title = "ZigZag Up Color")
+downColor = input(defval = color.red, title = "ZigZag Down Color")
+textColor = input(defval = color.black, title = "Text Color")
+strategyLblColor = input(defval = color.blue, title = "Strategy Label Color")
+strategyTxtColor = input(defval = color.white, title = "Strategy Text Color")
+zzStyle = input(defval = "Dashed", title = "ZigZag Line Style")
+zzWidth = input(defval = 2, minval = 1, maxval = 4)
+after_dot = input(defval = 2, title = "Decimals after dot")
+
+shortest = ema(close, 20)
+longest = ema(close, 200)
+
+plot(shortest, color = color.orange)
+plot(longest, color = color.blue)
+
+float pHigh = highestbars(high, prd) == 0 ? high : na
+float pLow = lowestbars(low, prd) == 0 ? low : na
+
+
+var direction = 0
+direction := iff(pHigh and na(pLow), 1, iff(pLow and na(pHigh), -1, direction))
+
+var max_array_size = 10
+var zigzag = array.new_float(0)
+oldZigzag = array.copy(zigzag)
+
+add_to_zigzag(pointer, value, bIndex) =>
+	array.unshift(pointer, bIndex)
+	array.unshift(pointer, value)
+	if array.size(pointer) > max_array_size
+		array.pop(pointer)
+		array.pop(pointer)
+
+update_zigzag(pointer, value, bIndex, direction) =>
+	if array.size(pointer) == 0
+		add_to_zigzag(pointer, value, bIndex)
+	else
+		if (direction == 1 and value > array.get(pointer, 0)) or (direction == -1 and value < array.get(pointer, 0))
+			array.set(pointer, 0, value)
+			array.set(pointer, 1, bIndex)
+		0.
+
+dirChanged = change(direction)
+if pHigh or pLow
+	if dirChanged
+		add_to_zigzag(zigzag, direction == 1 ? pHigh : pLow, bar_index)
+	else
+		update_zigzag(zigzag, direction == 1 ? pHigh : pLow, bar_index, direction)
+		
+top_price = float(na)
+bottom_price = float(na)
+
+strategyLong = bool(na)
+strategyShort = bool(na)
+
+if array.size(zigzag) >= 9
+	var line zzLine = na
+	var label zzLabel = na
+
+	if array.get(zigzag, 0) != array.get(oldZigzag, 0) or array.get(zigzag, 1) != array.get(oldZigzag, 1)
+		if array.get(zigzag, 2) == array.get(oldZigzag, 2) and array.get(zigzag, 3) == array.get(oldZigzag, 3)
+			line.delete(zzLine)
+			label.delete(zzLabel)
+
+		zzLine := line.new(x1 = round(array.get(zigzag, 1)),
+		                   y1 = array.get(zigzag, 0),
+		                   x2 = round(array.get(zigzag, 3)),
+		                   y2 = array.get(zigzag, 2),
+		                   color = direction == 1 ? upColor : downColor,
+		                   width = zzWidth,
+		                   style = line.style_dashed)
+
+		firstHighLow = array.get(zigzag, 0)
+    	secondHighLow = array.get(zigzag, 4)
+    	thirdHighLow = array.get(zigzag, 8)
+    	fourthHighLow = array.get(zigzag, 2)
+    	fifthHighLow = array.get(zigzag, 6)
+    	
+    	price_range_condition = bool(na)
+    	
+    	if direction == 1
+        	// Price range for Long
+        	highest_bar_price = close > open ? close : open
+        	top_price := highest_bar_price
+    		lowest_bar_open = open[array.get(zigzag, 1) - array.get(zigzag, 3)]
+    		lowest_bar_close = close[array.get(zigzag, 1) - array.get(zigzag, 3)]
+    		lowest_bar_price = lowest_bar_close > lowest_bar_open ? lowest_bar_open : lowest_bar_close
+    		bottom_price := lowest_bar_price
+    		price_range = (highest_bar_price - lowest_bar_price) * 100 / highest_bar_price
+    		price_range_condition := price_range >= 1 and price_range <= 15
+    		
+		else
+    		// Price range for Short
+    		lowest_bar_price = close < open ? close : open
+    		bottom_price := lowest_bar_price
+    		highest_bar_open = open[array.get(zigzag, 1) - array.get(zigzag, 3)]
+    		highest_bar_close = close[array.get(zigzag, 1) - array.get(zigzag, 3)]
+    		highest_bar_price = highest_bar_close > highest_bar_open ? highest_bar_close : highest_bar_open
+    		top_price := highest_bar_price
+    		price_range = (highest_bar_price - lowest_bar_price) * 100 / highest_bar_price
+    		price_range_condition := price_range >= 1 and price_range <= 15
+    	
+		strategyLong := direction == 1 and firstHighLow > secondHighLow and secondHighLow > thirdHighLow and fourthHighLow > fifthHighLow and shortest > longest - 10 and price_range_condition
+    	strategyShort := direction == -1 and firstHighLow < secondHighLow and secondHighLow < thirdHighLow and fourthHighLow < fifthHighLow and shortest - 10 < longest and price_range_condition
+		                   
+		hhlltxt = string(na)
+		labelcol = color(na)
+
+		if direction == 1
+			if array.get(zigzag, 0) > array.get(zigzag, 4)
+				if strategyLong
+					hhlltxt := "Long Entry"
+					labelcol := strategyLblColor
+				else
+					hhlltxt := "HH"
+					labelcol := upColor
+			else
+				hhlltxt := "LH"
+				labelcol := downColor
+		else
+			if array.get(zigzag, 0) < array.get(zigzag, 4)
+				if strategyShort
+					hhlltxt := "Short Entry"
+					labelcol := strategyLblColor
+				else
+					hhlltxt := "LL"
+					labelcol := downColor
+			else
+				hhlltxt := "HL"
+				labelcol := upColor
+
+		zzLabel := label.new(x = round(array.get(zigzag, 1)),
+		                     y = array.get(zigzag, 0),
+		                     text = hhlltxt,
+		                     color = labelcol,
+		                     textcolor = textColor,
+		                     style = direction == 1 ? label.style_label_down : label.style_label_up)
+		
+difference = top_price - bottom_price
+
+long_a = round(top_price - (difference * 23.6 / 100), after_dot)
+long_b = round(top_price - (difference * 38.2 / 100), after_dot)
+long_c = round(top_price - (difference * 50.0 / 100), after_dot)
+long_d = round(top_price - (difference * 61.8 / 100), after_dot)
+long_e = round(top_price - (difference * 78.6 / 100), after_dot)
+long_f = bottom_price
+stopLoss = round(top_price - (difference * 161.8 / 100), after_dot)
+
+long_qty_b = ceil((strategy.equity * 5 / 100)/long_b)
+long_qty_c = ceil((strategy.equity * 5 / 100)/long_c)
+long_qty_d = ceil((strategy.equity * 10 / 100)/long_d)
+long_qty_e = ceil((strategy.equity * 20 / 100)/long_e)
+long_qty_f = ceil((strategy.equity * 60 / 100)/long_f)
+
+var orderTime = array.new_int(1)
+
+strategyOpenLong() =>
+    strategy.order("First Buy order", true, qty = 5, limit = long_b)
+    strategy.order("Second Buy order", true, qty = 5, limit = long_c)
+    strategy.order("Third Buy order", true, qty = 10, limit = long_d)
+    strategy.order("Fourth Buy order", true, qty = 20, limit = long_e)
+    strategy.order("Fifth Buy order", true, qty = 60, limit = long_f)
+    array.set(orderTime, 0, time)
+    
+if strategyLong
+    strategyOpenLong()
+    
+if array.size(zigzag) >= 9
+    if array.get(zigzag, 0) != array.get(oldZigzag, 0) or array.get(zigzag, 1) != array.get(oldZigzag, 1)
+		if array.get(zigzag, 2) == array.get(oldZigzag, 2) and array.get(zigzag, 3) == array.get(oldZigzag, 3)
+		    strategy.cancel_all()
+		    strategyOpenLong()
+
+if time >= array.get(orderTime, 0) + 86400000
+    strategy.cancel_all()
+
+strategy.exit("First Long Take Profit", from_entry = "First Buy order", limit = long_a, stop = stopLoss)
+strategy.exit("Second Long Take Profit", from_entry = "Second Buy order", limit = long_b, stop = stopLoss)
+strategy.exit("Third Long Take Profit", from_entry = "Third Buy order", limit = long_c, stop = stopLoss)
+strategy.exit("Fourth Long Take Profit", from_entry = "Fourth Buy order", limit = long_d, stop = stopLoss)
+strategy.exit("FIfth Long Take Profit", from_entry = "Fifth Buy order", limit = long_e, stop = stopLoss)
